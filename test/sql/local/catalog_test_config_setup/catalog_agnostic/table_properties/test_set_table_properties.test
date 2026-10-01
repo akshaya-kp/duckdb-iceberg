@@ -96,6 +96,7 @@ select * from iceberg_table_properties(my_datalake.default.table_properties) whe
 another1	neato
 duckdb_man	superman
 write.delete.mode	merge-on-read
+write.update.mode	merge-on-read
 
 
 statement ok

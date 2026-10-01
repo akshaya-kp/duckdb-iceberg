@@ -566,9 +566,8 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 }
 
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {
-	auto mode = GetTableProperty(write_mode_property);
-	// if unset or merge-on-read, it supports positional deletes
-	return mode == "merge-on-read" || mode.empty();
+	// an unset mode means copy-on-write, the Iceberg default
+	return GetTableProperty(write_mode_property) == "merge-on-read";
 }
 
 JSONMutableValue IcebergTableMetadata::SchemasToJSON(JSONWriter &writer) const {

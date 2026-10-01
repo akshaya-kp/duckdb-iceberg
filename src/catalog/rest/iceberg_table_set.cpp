@@ -409,6 +409,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		        .GetValue<string>();
 		bootstrap_metadata.table_properties.emplace(option.first, option_val);
 	}
+	// DuckDB-Iceberg only writes merge-on-read deletes, while an unset write mode means copy-on-write
+	for (auto &write_mode_property : {WRITE_DELETE_MODE, WRITE_UPDATE_MODE, WRITE_MERGE_MODE}) {
+		bootstrap_metadata.table_properties.emplace(write_mode_property, "merge-on-read");
+	}
 
 	auto initial_partition_spec = IcebergTable::BuildPartitionSpec(info.partition_keys, *new_schema, 0, 1000);
 	//! Sort order id 0 is reserved for the unsorted order, so a table created with SORTED BY starts at 1
