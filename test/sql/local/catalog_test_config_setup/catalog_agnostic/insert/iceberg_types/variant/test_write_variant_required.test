@@ -1,0 +1,32 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/variant/test_write_variant_required.test
+# description: a required VARIANT field is written as a REQUIRED Parquet group
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.variant_required (v VARIANT NOT NULL) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.variant_required VALUES (1::VARIANT), ('x'::VARIANT), ({'a': 1}::VARIANT);
+
+query I
+SELECT v::VARCHAR FROM my_datalake.default.variant_required ORDER BY 1 NULLS LAST;
+----
+1
+x
+{'a': 1}
+
+statement ok
+SET VARIABLE data_files = (
+	SELECT list(file_path) FROM iceberg_metadata(my_datalake.default.variant_required) WHERE manifest_content = 'DATA'
+);
+
+query II
+SELECT name, repetition_type FROM parquet_schema(getvariable('data_files')) WHERE name = 'v';
+----
+v	REQUIRED

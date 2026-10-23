@@ -32,6 +32,8 @@ struct IcebergCopyInput {
 public:
 	const IcebergTableMetadata &table_metadata;
 	const IcebergTableSchema &schema;
+	//! Used in NOT NULL constraint errors
+	string table_name;
 	string data_path;
 	//! Set of (key, value) options
 	identifier_map_t<vector<Value>> options;
@@ -76,6 +78,9 @@ public:
 	vector<Identifier> names;
 	vector<LogicalType> expected_types;
 	bool partitioned_paths = true;
+	//! Positions in `names` of required fields; NULLs in them are rejected
+	vector<idx_t> required_columns;
+	string table_name;
 
 	//! Set of projection columns to execute prior to inserting (if any)
 	vector<unique_ptr<Expression>> projection_list;

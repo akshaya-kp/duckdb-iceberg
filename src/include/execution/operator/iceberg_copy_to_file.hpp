@@ -39,6 +39,8 @@ public:
 		return ctas_info != nullptr;
 	}
 
+	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override;
+
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
 
@@ -52,6 +54,9 @@ private:
 	//! Guards the CreateTable request and the entry it produces if the copy is part of a CTAS
 	mutable annotated_mutex create_lock;
 	mutable optional_ptr<IcebergTableSchemaVersion> created_table DUCKDB_GUARDED_BY(create_lock);
+	//! Positions of required fields in the input chunk; the Parquet writer marks them REQUIRED
+	vector<idx_t> required_columns;
+	string table_name;
 };
 
 } // namespace duckdb

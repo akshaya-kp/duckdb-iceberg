@@ -609,6 +609,8 @@ struct IcebergWriteColumn {
 	optional<Value> field_id;
 	//! Added only to route rows by a transformed partition value (e.g. day(ts)); not written to the file.
 	bool is_computed_partition_value = false;
+	//! A required field of the table schema.
+	bool required = false;
 };
 
 //! The layout of the chunk that reaches the copy operator. Built once, so that the copy bind
@@ -693,6 +695,7 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 			    BoundCastExpression::AddCastToType(context, std::move(write_column.source), write_column.type);
 		}
 		write_column.field_id = GetWrittenFieldIdValue(column);
+		write_column.required = column.required;
 		layout.columns.push_back(std::move(write_column));
 	}
 
@@ -867,12 +870,14 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	// stripped by PhysicalCopyToFile before writing, so including them would cause a type mismatch.
 	vector<string> names_to_write;
 	vector<LogicalType> types_to_write;
+	vector<bool> required_to_write;
 	for (auto &column : layout.columns) {
 		if (column.is_computed_partition_value) {
 			continue;
 		}
 		names_to_write.push_back(column.name);
 		types_to_write.push_back(column.type);
+		required_to_write.push_back(column.required);
 	}
 
 	if (names_to_write.empty()) {
@@ -919,6 +924,10 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	auto function_data =
 	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
 	result.bind_data = std::move(function_data);
+	// Required fields are written as REQUIRED Parquet columns, like Iceberg Java does. IcebergCopyToFile
+	// rejects NULLs in them before they reach the writer.
+	IcebergUtils::SetNotNullColumns(context, copy_fun.function, *result.bind_data, types_to_write, required_to_write);
+	result.table_name = copy_input.table_name;
 
 	// Mirrors Binder::BindCopyTo: without any batch size the copy operator flushes every chunk, producing
 	// one row group per vector (2048 rows). Table properties override the Iceberg defaults.
@@ -941,7 +950,11 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 
 	// The chunk that reaches the copy operator: written columns followed by any computed partition values.
 	const bool needs_projection = NeedsProjection(layout, copy_input);
-	for (auto &column : layout.columns) {
+	for (idx_t i = 0; i < layout.columns.size(); i++) {
+		auto &column = layout.columns[i];
+		if (column.required) {
+			result.required_columns.push_back(i);
+		}
 		result.names.emplace_back(column.name);
 		result.expected_types.push_back(column.type);
 		if (needs_projection) {
@@ -1113,6 +1126,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 
 	// Create Copy Info
 	IcebergCopyInput copy_input(context, table_metadata, schema);
+	copy_input.table_name = updated_table_entry.name.GetIdentifierName();
 	auto &insert = planner.Make<IcebergInsert>(op, updated_table_entry, op.column_index_map);
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 	insert.children.push_back(physical_copy);

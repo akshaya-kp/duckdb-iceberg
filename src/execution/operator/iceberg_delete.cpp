@@ -248,6 +248,8 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 
 	auto function_data =
 	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
+	// The position delete file schema requires both columns
+	IcebergUtils::SetNotNullColumns(context, copy_fun.function, *function_data, types_to_write, {true, true});
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// generate the physical copy to file

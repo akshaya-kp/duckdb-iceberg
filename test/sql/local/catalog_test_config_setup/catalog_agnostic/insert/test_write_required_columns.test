@@ -1,0 +1,146 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_required_columns.test
+# description: required fields are written as REQUIRED Parquet columns by INSERT, UPDATE, DELETE and compaction
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.required_columns (
+	a INTEGER NOT NULL,
+	b INTEGER,
+	s STRUCT(x INTEGER) NOT NULL,
+	l INTEGER[] NOT NULL,
+	m MAP(VARCHAR, INTEGER) NOT NULL,
+	v VARCHAR NOT NULL
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.required_columns VALUES (1, NULL, {'x': NULL}, [NULL], MAP {'k': NULL}, 'one'), (2, 2, {'x': 2}, [], MAP {}, 'two');
+
+statement error
+INSERT INTO my_datalake.default.required_columns VALUES (3, 3, {'x': 3}, [3], MAP {}, NULL);
+----
+Constraint Error: NOT NULL constraint failed: required_columns.v
+
+statement error
+UPDATE my_datalake.default.required_columns SET a = NULL WHERE a = 1;
+----
+Constraint Error: NOT NULL constraint failed: required_columns.a
+
+statement ok
+UPDATE my_datalake.default.required_columns SET b = 20 WHERE a = 2;
+
+statement ok
+DELETE FROM my_datalake.default.required_columns WHERE a = 1;
+
+statement ok
+INSERT INTO my_datalake.default.required_columns VALUES (4, 4, {'x': 4}, [4], MAP {'k': 4}, 'four');
+
+query IIIIII
+SELECT * FROM my_datalake.default.required_columns ORDER BY a;
+----
+2	20	{'x': 2}	[]	{}	two
+4	4	{'x': 4}	[4]	{k=4}	four
+
+statement ok
+SET VARIABLE data_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.required_columns)
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+# Written by the first INSERT, the UPDATE and the second INSERT. Nested fields stay OPTIONAL.
+query III
+SELECT name, repetition_type, count(*)
+FROM parquet_schema(getvariable('data_files'))
+WHERE name IN ('a', 'b', 's', 'l', 'm', 'v')
+GROUP BY ALL
+ORDER BY name;
+----
+a	REQUIRED	3
+b	OPTIONAL	3
+l	REQUIRED	3
+m	REQUIRED	3
+s	REQUIRED	3
+v	REQUIRED	3
+
+statement ok
+SET VARIABLE delete_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.required_columns)
+	WHERE manifest_content = 'DELETE' AND status <> 'DELETED'
+);
+
+# The position delete file schema requires both columns
+query III
+SELECT name, repetition_type, count(*)
+FROM parquet_schema(getvariable('delete_files'))
+WHERE name IN ('file_path', 'pos')
+GROUP BY ALL
+ORDER BY name;
+----
+file_path	REQUIRED	2
+pos	REQUIRED	2
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.required_columns', min_input_files => 2);
+
+statement ok
+SET VARIABLE rewritten_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.required_columns)
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+query III
+SELECT name, repetition_type, count(*)
+FROM parquet_schema(getvariable('rewritten_files'))
+WHERE name IN ('a', 'b', 'v')
+GROUP BY ALL
+ORDER BY name;
+----
+a	REQUIRED	1
+b	OPTIONAL	1
+v	REQUIRED	1
+
+query IIIIII
+SELECT * FROM my_datalake.default.required_columns ORDER BY a;
+----
+2	20	{'x': 2}	[]	{}	two
+4	4	{'x': 4}	[4]	{k=4}	four
+
+# Partitioned: computed partition values follow the written columns in the copy input
+statement ok
+CREATE TABLE my_datalake.default.required_columns_partitioned (
+	ts TIMESTAMP NOT NULL,
+	id INTEGER NOT NULL,
+	name VARCHAR
+) PARTITIONED BY (day(ts), id) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.required_columns_partitioned VALUES ('2024-01-01 10:00:00', 1, NULL), ('2024-01-02 10:00:00', 2, 'b');
+
+statement error
+INSERT INTO my_datalake.default.required_columns_partitioned VALUES (NULL, 3, 'c');
+----
+Constraint Error: NOT NULL constraint failed: required_columns_partitioned.ts
+
+statement ok
+SET VARIABLE partitioned_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.required_columns_partitioned)
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+query III
+SELECT name, repetition_type, count(*)
+FROM parquet_schema(getvariable('partitioned_files'))
+WHERE name IN ('ts', 'id', 'name')
+GROUP BY ALL
+ORDER BY name;
+----
+id	REQUIRED	2
+name	OPTIONAL	2
+ts	REQUIRED	2

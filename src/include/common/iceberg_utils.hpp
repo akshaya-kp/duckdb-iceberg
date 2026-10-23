@@ -44,6 +44,9 @@ public:
 	static optional_ptr<SchemaCatalogEntry> GetSchemaEntry(ClientContext &context, string &input_string);
 	static idx_t CountOccurrences(const string &input, const string &to_find);
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const Identifier &name);
+	//! Tell the copy function which of its columns never hold NULLs, so the Parquet writer marks them REQUIRED.
+	static void SetNotNullColumns(ClientContext &context, const CopyFunction &function, FunctionData &bind_data,
+	                              const vector<LogicalType> &types, const vector<bool> &not_null);
 	static idx_t ParseByteSizeOptionallyFormatted(const string &input);
 	static int64_t AddFileSizeChecked(int64_t total, int64_t file_size_in_bytes);
 	static timestamp_ms_t GetTransactionStartTimeMS(ClientContext &context);

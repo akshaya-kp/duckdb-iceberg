@@ -1,6 +1,7 @@
 #include "execution/operator/iceberg_copy_to_file.hpp"
 
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -44,6 +45,8 @@ void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
 	// PlanCopyForInsert moves these out into a PhysicalOrder when the write is not partitioned, leaving an
 	// empty vector here; for a partitioned write the copy operator sorts within each partition itself.
 	order_columns = std::move(copy_options.order_columns);
+	required_columns = std::move(copy_options.required_columns);
+	table_name = std::move(copy_options.table_name);
 }
 
 unique_ptr<GlobalSinkState> IcebergCopyToFile::GetGlobalSinkState(ClientContext &context) const {
@@ -86,10 +89,21 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 
 	// Replace the plan-time options, which were derived from placeholder metadata without a location.
 	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	copy_input.table_name = ic_table.name.GetIdentifierName();
 	auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
 	op.ApplyCopyOptions(copy_options);
 
 	created_table = &ic_table;
+}
+
+SinkResultType IcebergCopyToFile::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
+	for (auto column_idx : required_columns) {
+		if (VectorOperations::HasNull(chunk.data[column_idx])) {
+			throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name,
+			                          names[column_idx].GetIdentifierName());
+		}
+	}
+	return PhysicalCopyToFile::Sink(context, chunk, input);
 }
 
 optional_ptr<IcebergTableSchemaVersion> IcebergCopyToFile::GetCreatedTable() const {

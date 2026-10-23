@@ -10,6 +10,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "duckdb/common/operator/add.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -54,6 +55,26 @@ idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
 		throw InvalidConfigurationException("Invalid format for 'write.target-file-size-bytes' (%s), error: %s", input,
 		                                    error);
 	}
+}
+
+void IcebergUtils::SetNotNullColumns(ClientContext &context, const CopyFunction &function, FunctionData &bind_data,
+                                     const vector<LogicalType> &types, const vector<bool> &not_null) {
+	D_ASSERT(types.size() == not_null.size());
+	if (!function.copy_to_propagate_statistics) {
+		return;
+	}
+	vector<unique_ptr<BaseStatistics>> stats;
+	vector<optional_ptr<BaseStatistics>> column_stats(types.size());
+	for (idx_t i = 0; i < types.size(); i++) {
+		if (!not_null[i]) {
+			continue;
+		}
+		stats.push_back(BaseStatistics::CreateUnknown(types[i]).ToUnique());
+		stats.back()->Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
+		column_stats[i] = stats.back().get();
+	}
+	CopyToPropagateStatsInput input {context, bind_data, column_stats};
+	function.copy_to_propagate_statistics(input);
 }
 
 CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const Identifier &name) {

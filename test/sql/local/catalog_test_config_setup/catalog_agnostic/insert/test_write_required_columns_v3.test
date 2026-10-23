@@ -1,0 +1,59 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_required_columns_v3.test
+# description: required fields stay REQUIRED in Parquet when V3 UPDATE and MERGE also write row lineage columns
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.required_columns_v3 (
+	id INTEGER NOT NULL,
+	val VARCHAR
+) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.required_columns_v3 VALUES (1, 'a'), (2, 'b');
+
+statement ok
+UPDATE my_datalake.default.required_columns_v3 SET val = 'bb' WHERE id = 2;
+
+statement ok
+MERGE INTO my_datalake.default.required_columns_v3 t
+USING (VALUES (1, 'aa'), (3, 'c')) s(id, val) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.val);
+
+statement error
+MERGE INTO my_datalake.default.required_columns_v3 t
+USING (VALUES (4, 'd')) s(id, val) ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT VALUES (NULL, s.val);
+----
+Constraint Error: NOT NULL constraint failed: required_columns_v3.id
+
+query III
+SELECT id, val, _row_id IS NOT NULL FROM my_datalake.default.required_columns_v3 ORDER BY id;
+----
+1	aa	true
+2	bb	true
+3	c	true
+
+statement ok
+SET VARIABLE data_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.required_columns_v3)
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+# Row lineage columns are optional
+query II
+SELECT DISTINCT name, repetition_type
+FROM parquet_schema(getvariable('data_files'))
+WHERE name IN ('id', 'val', '_row_id', '_last_updated_sequence_number')
+ORDER BY name;
+----
+_row_id	OPTIONAL
+id	REQUIRED
+val	OPTIONAL
